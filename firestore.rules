@@ -1,0 +1,32 @@
+// Firestore security rules for the `books` collection
+// DEV NOTE: These rules are intended for development/testing only.
+// They allow reads by anyone and allow create/update when the document
+// contains valid fields (title, author, copies). Do NOT use these in
+// production without adding proper authentication and stricter rules.
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Scoped rule: only affects documents under the `books` collection
+    match /books/{bookId} {
+      // Allow anyone to read the books collection (for testing)
+      allow read: if true;
+
+      // Allow create/update only if the required fields exist with correct types
+      allow create, update: if request.resource.data.keys().hasAll(['title', 'author', 'copies'])
+                            && request.resource.data.title is string
+                            && request.resource.data.author is string
+                            && (request.resource.data.copies is int || request.resource.data.copies is float)
+                            && request.resource.data.copies >= 0;
+
+      // Allow deletes for testing (consider restricting to authenticated users)
+      allow delete: if true;
+    }
+
+    // Deny access to all other collections/documents by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
