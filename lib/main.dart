@@ -34,11 +34,13 @@ class LibraryHomePage extends StatefulWidget {
 
 class _LibraryHomePageState extends State<LibraryHomePage> {
   final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _copiesController = TextEditingController();
 
   bool _initError = false;
   bool _isSearching = false;
   String? _notFoundMessage;
   List<Map<String, dynamic>> _results = [];
+  String? _selectedDocId;
 
   @override
   void initState() {
@@ -75,6 +77,7 @@ class _LibraryHomePageState extends State<LibraryHomePage> {
               ? (data['copies'] as double).toInt()
               : int.tryParse('${data['copies']}') ?? 0;
           return {
+            'id': d.id,
             'title': data['title'] ?? '',
             'author': data['author'] ?? '',
             'copies': copies,
@@ -83,6 +86,9 @@ class _LibraryHomePageState extends State<LibraryHomePage> {
 
         setState(() {
           _results = list;
+          // Reset selection when new search happens
+          _selectedDocId = null;
+          _copiesController.clear();
         });
       }
     } catch (e) {
@@ -90,15 +96,50 @@ class _LibraryHomePageState extends State<LibraryHomePage> {
         _notFoundMessage = 'Error searching books: $e';
       });
     } finally {
-      if (mounted) {
-        setState(() => _isSearching = false);
-      }
+      if (mounted) setState(() => _isSearching = false);
+    }
+  }
+
+  Future<void> _updateCopies() async {
+    final copyText = _copiesController.text.trim();
+    final parsed = int.tryParse(copyText);
+    if (parsed == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid integer for copies.'),
+        ),
+      );
+      return;
+    }
+
+    try {
+      final col = FirebaseFirestore.instance.collection('books');
+      await col.doc(_selectedDocId).update({'copies': parsed});
+
+      if (!mounted) return;
+      setState(() {
+        for (var r in _results) {
+          if (r['id'] == _selectedDocId) r['copies'] = parsed;
+        }
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Copies updated successfully.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to update copies: $e')));
     }
   }
 
   @override
   void dispose() {
     _titleController.dispose();
+    _copiesController.dispose();
     super.dispose();
   }
 
@@ -141,6 +182,15 @@ class _LibraryHomePageState extends State<LibraryHomePage> {
               onSubmitted: (_) => _searchBook(),
             ),
             const SizedBox(height: 12),
+            TextField(
+              controller: _copiesController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Updated number of copies',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
@@ -154,9 +204,11 @@ class _LibraryHomePageState extends State<LibraryHomePage> {
                 ElevatedButton(
                   onPressed: () {
                     _titleController.clear();
+                    _copiesController.clear();
                     setState(() {
                       _results = [];
                       _notFoundMessage = null;
+                      _selectedDocId = null;
                     });
                   },
                   style: ElevatedButton.styleFrom(
@@ -187,8 +239,11 @@ class _LibraryHomePageState extends State<LibraryHomePage> {
                   separatorBuilder: (_, __) => const Divider(),
                   itemBuilder: (context, index) {
                     final item = _results[index];
+                    final docId = item['id'] as String?;
                     final copies = item['copies'] as int? ?? 0;
                     final isUnavailable = copies == 0;
+                    final isSelected =
+                        (_selectedDocId != null && _selectedDocId == docId);
 
                     return ListTile(
                       title: Text('${item['title']}'),
@@ -209,10 +264,36 @@ class _LibraryHomePageState extends State<LibraryHomePage> {
                             ),
                         ],
                       ),
+                      tileColor: isSelected
+                          ? Colors.indigo.withOpacity(0.08)
+                          : null,
+                      onTap: docId == null
+                          ? null
+                          : () {
+                              setState(() {
+                                _selectedDocId = docId;
+                                _copiesController.text = copies.toString();
+                              });
+                            },
+                      trailing: isSelected ? const Icon(Icons.edit) : null,
                     );
                   },
                 ),
               ),
+            if (_selectedDocId != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _updateCopies,
+                      icon: const Icon(Icons.update),
+                      label: const Text('Update'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
