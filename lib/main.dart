@@ -4,296 +4,216 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp();
-  } catch (e) {
-    // Initialization errors will be reported in the UI.
-  }
-  runApp(const LibraryApp());
+  await Firebase.initializeApp();
+  runApp(const ProductUpdateApp());
 }
 
-class LibraryApp extends StatelessWidget {
-  const LibraryApp({super.key});
+class ProductUpdateApp extends StatelessWidget {
+  const ProductUpdateApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Library Book Manager',
+      title: 'Update Product Details',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.indigo),
-      home: const LibraryHomePage(),
+      home: const ProductUpdatePage(),
     );
   }
 }
 
-class LibraryHomePage extends StatefulWidget {
-  const LibraryHomePage({super.key});
+class ProductUpdatePage extends StatefulWidget {
+  const ProductUpdatePage({super.key});
 
   @override
-  State<LibraryHomePage> createState() => _LibraryHomePageState();
+  State<ProductUpdatePage> createState() => _ProductUpdatePageState();
 }
 
-class _LibraryHomePageState extends State<LibraryHomePage> {
-  final TextEditingController _titleController = TextEditingController();
-  final TextEditingController _copiesController = TextEditingController();
+class _ProductUpdatePageState extends State<ProductUpdatePage> {
+  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _quantityController = TextEditingController();
+  final TextEditingController _priceController = TextEditingController();
 
-  bool _initError = false;
-  bool _isSearching = false;
-  String? _notFoundMessage;
-  List<Map<String, dynamic>> _results = [];
-  String? _selectedDocId;
+  String _status = "";
+  String? _docId; // to hold Firestore doc id
+  bool _isLoading = false;
+  Map<String, dynamic>? _productData;
 
-  @override
-  void initState() {
-    super.initState();
-    Firebase.apps.isEmpty ? _initError = true : _initError = false;
-  }
-
-  Future<void> _searchBook() async {
-    final title = _titleController.text.trim();
-    if (title.isEmpty) return;
+  /// 🔍 Search product by name
+  Future<void> _searchProduct() async {
+    final name = _searchController.text.trim();
+    if (name.isEmpty) {
+      setState(() {
+        _status = "Please enter a product name.";
+        _productData = null;
+      });
+      return;
+    }
 
     setState(() {
-      _isSearching = true;
-      _notFoundMessage = null;
-      _results = [];
+      _isLoading = true;
+      _status = "";
+      _productData = null;
+      _docId = null;
     });
 
     try {
-      final col = FirebaseFirestore.instance.collection('books');
-
-      // Exact title match.
-      final snapshot = await col.where('title', isEqualTo: title).get();
+      final snapshot = await FirebaseFirestore.instance
+          .collection('products_details')
+          .where('name', isEqualTo: name)
+          .get();
 
       if (snapshot.docs.isEmpty) {
         setState(() {
-          _notFoundMessage = 'Book not found';
+          _status = "Product not found";
         });
       } else {
-        final list = snapshot.docs.map((d) {
-          final data = d.data();
-          final copies = (data['copies'] is int)
-              ? data['copies'] as int
-              : (data['copies'] is double)
-              ? (data['copies'] as double).toInt()
-              : int.tryParse('${data['copies']}') ?? 0;
-          return {
-            'id': d.id,
-            'title': data['title'] ?? '',
-            'author': data['author'] ?? '',
-            'copies': copies,
-          };
-        }).toList();
-
+        final doc = snapshot.docs.first;
+        final data = doc.data();
         setState(() {
-          _results = list;
-          // Reset selection when new search happens
-          _selectedDocId = null;
-          _copiesController.clear();
+          _docId = doc.id;
+          _productData = data;
+          _quantityController.text = data['quantity'].toString();
+          _priceController.text = data['price'].toString();
         });
       }
     } catch (e) {
       setState(() {
-        _notFoundMessage = 'Error searching books: $e';
+        _status = "Error: $e";
       });
     } finally {
-      if (mounted) setState(() => _isSearching = false);
+      setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _updateCopies() async {
-    final copyText = _copiesController.text.trim();
-    final parsed = int.tryParse(copyText);
-    if (parsed == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a valid integer for copies.'),
-        ),
-      );
+  /// ✏️ Update product details
+  Future<void> _updateProduct() async {
+    if (_docId == null) {
+      setState(() => _status = "Search a product first.");
       return;
     }
 
-    try {
-      final col = FirebaseFirestore.instance.collection('books');
-      await col.doc(_selectedDocId).update({'copies': parsed});
+    final newQuantity = double.tryParse(_quantityController.text.trim());
+    final newPrice = double.tryParse(_priceController.text.trim());
 
-      if (!mounted) return;
-      setState(() {
-        for (var r in _results) {
-          if (r['id'] == _selectedDocId) r['copies'] = parsed;
-        }
-      });
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Copies updated successfully.')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to update copies: $e')));
+    if (newQuantity == null || newPrice == null) {
+      setState(() => _status = "Enter valid numeric values.");
+      return;
     }
-  }
 
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _copiesController.dispose();
-    super.dispose();
+    setState(() => _isLoading = true);
+
+    try {
+      final ref = FirebaseFirestore.instance
+          .collection('products_details')
+          .doc(_docId);
+
+      await ref.update({'quantity': newQuantity, 'price': newPrice});
+
+      // fetch updated data to display
+      final updated = await ref.get();
+      setState(() {
+        _productData = updated.data();
+        _status = "✅ Product updated successfully!";
+      });
+    } catch (e) {
+      setState(() => _status = "Error updating product: $e");
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_initError) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Library Book Search')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: const [
-                Icon(Icons.error_outline, size: 48, color: Colors.red),
-                SizedBox(height: 12),
-                Text(
-                  'Firebase is not initialized.\nPlease add your google-services.json (Android) or configure Firebase for your platform and restart the app.',
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
     return Scaffold(
-      appBar: AppBar(title: const Text('Library Book Search')),
+      appBar: AppBar(
+        title: const Text('Update Product Details'),
+        backgroundColor: Colors.indigo,
+      ),
       body: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(20),
         child: Column(
           children: [
             TextField(
-              controller: _titleController,
+              controller: _searchController,
               decoration: const InputDecoration(
-                labelText: 'Enter book title',
-                border: OutlineInputBorder(),
-              ),
-              onSubmitted: (_) => _searchBook(),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _copiesController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Updated number of copies',
+                labelText: 'Enter product name',
                 border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _isSearching ? null : _searchBook,
-                    icon: const Icon(Icons.search),
-                    label: const Text('Search'),
+                  child: ElevatedButton(
+                    onPressed: _searchProduct,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.indigo,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text("Search"),
                   ),
                 ),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  onPressed: () {
-                    _titleController.clear();
-                    _copiesController.clear();
-                    setState(() {
-                      _results = [];
-                      _notFoundMessage = null;
-                      _selectedDocId = null;
-                    });
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.grey[300],
-                    foregroundColor: Colors.black,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _updateProduct,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text("Update"),
                   ),
-                  child: const Text('Clear'),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
-
-            if (_isSearching) const CircularProgressIndicator(),
-
-            if (!_isSearching && _notFoundMessage != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12.0),
-                child: Text(
-                  _notFoundMessage!,
-                  style: const TextStyle(fontSize: 16),
+            const SizedBox(height: 20),
+            if (_isLoading)
+              const CircularProgressIndicator()
+            else if (_status.isNotEmpty)
+              Text(
+                _status,
+                style: TextStyle(
+                  color: _status.startsWith("✅") ? Colors.green : Colors.red,
+                  fontWeight: FontWeight.bold,
                 ),
-              ),
-
-            if (!_isSearching && _results.isNotEmpty)
-              Expanded(
-                child: ListView.separated(
-                  itemCount: _results.length,
-                  separatorBuilder: (_, __) => const Divider(),
-                  itemBuilder: (context, index) {
-                    final item = _results[index];
-                    final docId = item['id'] as String?;
-                    final copies = item['copies'] as int? ?? 0;
-                    final isUnavailable = copies == 0;
-                    final isSelected =
-                        (_selectedDocId != null && _selectedDocId == docId);
-
-                    return ListTile(
-                      title: Text('${item['title']}'),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Author: ${item['author']}'),
-                          const SizedBox(height: 4),
-                          Text('Copies Available: $copies'),
-                          if (isUnavailable) const SizedBox(height: 6),
-                          if (isUnavailable)
-                            const Text(
-                              'Not Available – All Copies Issued',
-                              style: TextStyle(
-                                color: Colors.red,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                        ],
+              )
+            else if (_productData != null)
+              Card(
+                elevation: 3,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Name: ${_productData!['name']}",
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                      tileColor: isSelected
-                          ? Colors.indigo.withOpacity(0.08)
-                          : null,
-                      onTap: docId == null
-                          ? null
-                          : () {
-                              setState(() {
-                                _selectedDocId = docId;
-                                _copiesController.text = copies.toString();
-                              });
-                            },
-                      trailing: isSelected ? const Icon(Icons.edit) : null,
-                    );
-                  },
+                      const SizedBox(height: 5),
+                      TextField(
+                        controller: _quantityController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: "Quantity",
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      TextField(
+                        controller: _priceController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: "Price"),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            if (_selectedDocId != null) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _updateCopies,
-                      icon: const Icon(Icons.update),
-                      label: const Text('Update'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
           ],
         ),
       ),
